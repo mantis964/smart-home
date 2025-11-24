@@ -69,6 +69,7 @@ void MX_USB_HOST_Process(void);
 uint32_t mq_raw = 0;
 float mq_voltage = 0;
 float Rs = 0, ratio = 0;
+uint8_t ldr_state = 0;
 
 // Calibration constant (You can calibrate later)
 float Ro = 10.0;  // Assume clean-air baseline
@@ -142,72 +143,61 @@ int main(void)
     /* USER CODE END WHILE */
     MX_USB_HOST_Process();
 
-    /* USER CODE BEGIN 3 */
-    // Start ADC Conversion
     HAL_ADC_Start(&hadc1);
-    HAL_ADC_PollForConversion(&hadc1, 100);
+        HAL_ADC_PollForConversion(&hadc1, 100);
 
-    mq_raw = HAL_ADC_GetValue(&hadc1);
+        mq_raw = HAL_ADC_GetValue(&hadc1);
+        mq_voltage = (mq_raw * 3.3f) / 4095.0f;
 
-    // Convert ADC to voltage (After level shifter: 0–3.3 V)
-    mq_voltage = (mq_raw * 3.3f) / 4095.0f;
+        Rs = (3.3f - mq_voltage) / mq_voltage;
+        ratio = Rs / Ro;
 
-    // Convert to Rs (sensor resistance)
-    Rs = (3.3f - mq_voltage) / mq_voltage;
+        // ===== PPM Calculations =====
+        float ppm_lpg = pow(10, ((log10(ratio) - (-0.47)) / (-0.36)));
+        float ppm_smoke = pow(10, ((log10(ratio) - (-0.42)) / (-0.48)));
+        float ppm_co = pow(10, ((log10(ratio) - (-0.37)) / (-0.33)));
 
-    // Ratio Rs/Ro
-    ratio = Rs / Ro;
+        // ===== LDR digital input (PA0) =====
+        uint8_t ldr_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
 
-    // =============================
-    //   PPM Calculations
-    //   From MQ2 datasheet curves
-    // =============================
+        // ===== LCD DISPLAY (ALL ON ONE SCREEN) =====
+        LCD_SendCommand(0x01);
 
-    // LPG ppm
-    float ppm_lpg = pow(10, ((log10(ratio) - (-0.47)) / (-0.36)));
+        // Line 1: R, V, LDR
+        LCD_SetCursor(0,0);
+        LCD_SendString("R:");
+        LCD_SendInt(mq_raw);
 
-    // Smoke ppm
-    float ppm_smoke = pow(10, ((log10(ratio) - (-0.42)) / (-0.48)));
+        LCD_SetCursor(0,8);
+        LCD_SendString("V:");
+        LCD_SendFloat(mq_voltage);
 
-    // CO ppm (approx)
-    float ppm_co = pow(10, ((log10(ratio) - (-0.37)) / (-0.33)));
+        LCD_SetCursor(0,15);
+        LCD_SendString("L:");
+        if (ldr_state == GPIO_PIN_SET)
+            LCD_SendString("DARK");   // bright
+        else
+            LCD_SendString("BRGT");   // dark
 
+        // Line 2: LPG
+        LCD_SetCursor(1,0);
+        LCD_SendString("LPG:");
+        LCD_SendInt((int)ppm_lpg);
+        LCD_SendString(" ppm");
 
-    // =============================
-    //        LCD DISPLAY
-    // =============================
-    LCD_SendCommand(0x01);
+        // Line 3: CO
+        LCD_SetCursor(2,0);
+        LCD_SendString("CO :");
+        LCD_SendInt((int)ppm_co);
+        LCD_SendString(" ppm");
 
-    // Line 1: Raw + Voltage
-    LCD_SetCursor(0,0);
-    LCD_SendString("R:");
-    LCD_SendInt(mq_raw);
+        // Line 4: Smoke
+        LCD_SetCursor(3,0);
+        LCD_SendString("SMK:");
+        LCD_SendInt((int)ppm_smoke);
+        LCD_SendString(" ppm");
 
-    LCD_SetCursor(0,8);
-    LCD_SendString("V:");
-    LCD_SendFloat(mq_voltage);
-
-    // Line 2: Show one PPM at a time
-    LCD_SetCursor(1,0);
-    LCD_SendString("LPG:");
-    LCD_SendInt((int)ppm_lpg);
-
-    HAL_Delay(600);
-
-    LCD_SendCommand(0x01);
-    LCD_SetCursor(0,0);
-    LCD_SendString("CO:");
-    LCD_SendInt((int)ppm_co);
-
-    HAL_Delay(600);
-
-    LCD_SendCommand(0x01);
-    LCD_SetCursor(0,0);
-    LCD_SendString("SMK:");
-    LCD_SendInt((int)ppm_smoke);
-
-    HAL_Delay(600);
-
+        HAL_Delay(300);
 
   }// read every 2 seconds
   /* USER CODE END 3 */
@@ -437,6 +427,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(PDM_OUT_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB1 PB2 PB10
                            PB12 PB14 */
