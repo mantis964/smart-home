@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lcd.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,6 +42,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
 I2S_HandleTypeDef hi2s3;
 
 SPI_HandleTypeDef hspi1;
@@ -54,6 +57,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_ADC1_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
@@ -62,8 +66,12 @@ void MX_USB_HOST_Process(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+uint32_t mq_raw = 0;
+float mq_voltage = 0;
+float Rs = 0, ratio = 0;
 
-
+// Calibration constant (You can calibrate later)
+float Ro = 10.0;  // Assume clean-air baseline
 /* USER CODE END 0 */
 
 /**
@@ -99,15 +107,30 @@ int main(void)
   MX_I2S3_Init();
   MX_SPI1_Init();
   MX_USB_HOST_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
+
+  LCD_Init();
+  HAL_Delay(500);
+  LCD_SendCommand(0x01);
+  LCD_SendString("MQ2 Initializing");
+  HAL_Delay(2000);
+
+  // Start ADC
+  HAL_ADC_Start(&hadc1);
+
+  LCD_SendCommand(0x01);
+  LCD_SendString("MQ2 Ready");
+  HAL_Delay(1000);
 
   // ---- Initialize LCD ----
   LCD_Init();
   HAL_Delay(500);
 
+
   LCD_SendCommand(0x01);
-  LCD_SendString("pRATYUSH");
-  HAL_Delay(1000);
+  LCD_SendString("Sending start...");
+  HAL_Delay(2000);
 
 
   /* USER CODE END 2 */
@@ -120,7 +143,73 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-  }
+    // Start ADC Conversion
+    HAL_ADC_Start(&hadc1);
+    HAL_ADC_PollForConversion(&hadc1, 100);
+
+    mq_raw = HAL_ADC_GetValue(&hadc1);
+
+    // Convert ADC to voltage (After level shifter: 0–3.3 V)
+    mq_voltage = (mq_raw * 3.3f) / 4095.0f;
+
+    // Convert to Rs (sensor resistance)
+    Rs = (3.3f - mq_voltage) / mq_voltage;
+
+    // Ratio Rs/Ro
+    ratio = Rs / Ro;
+
+    // =============================
+    //   PPM Calculations
+    //   From MQ2 datasheet curves
+    // =============================
+
+    // LPG ppm
+    float ppm_lpg = pow(10, ((log10(ratio) - (-0.47)) / (-0.36)));
+
+    // Smoke ppm
+    float ppm_smoke = pow(10, ((log10(ratio) - (-0.42)) / (-0.48)));
+
+    // CO ppm (approx)
+    float ppm_co = pow(10, ((log10(ratio) - (-0.37)) / (-0.33)));
+
+
+    // =============================
+    //        LCD DISPLAY
+    // =============================
+    LCD_SendCommand(0x01);
+
+    // Line 1: Raw + Voltage
+    LCD_SetCursor(0,0);
+    LCD_SendString("R:");
+    LCD_SendInt(mq_raw);
+
+    LCD_SetCursor(0,8);
+    LCD_SendString("V:");
+    LCD_SendFloat(mq_voltage);
+
+    // Line 2: Show one PPM at a time
+    LCD_SetCursor(1,0);
+    LCD_SendString("LPG:");
+    LCD_SendInt((int)ppm_lpg);
+
+    HAL_Delay(600);
+
+    LCD_SendCommand(0x01);
+    LCD_SetCursor(0,0);
+    LCD_SendString("CO:");
+    LCD_SendInt((int)ppm_co);
+
+    HAL_Delay(600);
+
+    LCD_SendCommand(0x01);
+    LCD_SetCursor(0,0);
+    LCD_SendString("SMK:");
+    LCD_SendInt((int)ppm_smoke);
+
+    HAL_Delay(600);
+
+
+  }// read every 2 seconds
   /* USER CODE END 3 */
 }
 
@@ -167,6 +256,58 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
 }
 
 /**
@@ -296,12 +437,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(PDM_OUT_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB1 PB2 PB10
                            PB12 PB14 */
