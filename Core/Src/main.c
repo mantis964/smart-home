@@ -56,7 +56,10 @@ UART_HandleTypeDef huart3;
 /* USER CODE BEGIN PV */
 extern TIM_HandleTypeDef htim2;   // you already have TIM2 handle
 DHT22_Data dht;                   // holds Temperature (°C) and Humidity (%RH)
-uint32_t dht_last_ms = 0;         // to enforce DHT22 ≥2s sampling interval
+uint32_t dht_last_ms = 0;    // to enforce DHT22 ≥2s sampling interval
+#define BUZZER_PORT GPIOC
+#define BUZZER_PIN  GPIO_PIN_5
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -142,6 +145,9 @@ int main(void)
   LCD_SendCommand(0x01);
   LCD_SendString("Sending start...");
   HAL_Delay(2000);
+  HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+
+
 
 
   /* USER CODE END 2 */
@@ -151,68 +157,67 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
+	  MX_USB_HOST_Process();
 
-    /* USER CODE BEGIN 3 */
-    // ===== LDR Read (Digital) =====
-    if (HAL_GetTick() - dht_last_ms >= 2100) {
-        if (DHT22_Read(&dht) != 0) {
-            // optional: keep previous values if read fails
-            // you can also show "DHT ERR" on LCD if you want
-        }
-        dht_last_ms = HAL_GetTick();
-    }
+	      // --------- LDR Read ---------
+	      ldr_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+	      int L = (ldr_state == GPIO_PIN_RESET) ? 1 : 0;
+	      char *ldr_text = (L == 1) ? "BRIGHT" : "DARK";
 
-    // ===== LDR Read (Digital) =====
-    ldr_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
-    int L = (ldr_state == GPIO_PIN_RESET) ? 1 : 0;  // 1 = Bright
-    char *ldr_text = (L == 1) ? (char*)"BRIGHT" : (char*)"DARK";
+	      // --------- MQ-2 ADC Read ---------
+	      HAL_ADC_Start(&hadc1);
+	      HAL_ADC_PollForConversion(&hadc1, 100);
+	      mq_raw = HAL_ADC_GetValue(&hadc1);
 
-    // ===== MQ-2 ADC Read =====
-    HAL_ADC_Start(&hadc1);
-    HAL_ADC_PollForConversion(&hadc1, 100);
-    mq_raw = HAL_ADC_GetValue(&hadc1);
+	      mq_voltage = (mq_raw * 3.3f) / 4095.0f;
+	      Rs = (3.3f - mq_voltage) / (mq_voltage + 1e-6f);
+	      ratio = Rs / Ro;
 
-    // ADC → Voltage
-    mq_voltage = (mq_raw * 3.3f) / 4095.0f;
+	      float ppm_lpg   = pow(10, ((log10(ratio) - (-0.47)) / (-0.36)));
+	      float ppm_smoke = pow(10, ((log10(ratio) - (-0.42)) / (-0.48)));
+	      float ppm_co    = pow(10, ((log10(ratio) - (-0.37)) / (-0.33)));
 
-    // Sensor Resistance (divider with RL at bottom)
-    Rs = (3.3f - mq_voltage) / (mq_voltage + 1e-6f);   // keep your formula; or Rs = (RL*(Vcc-V)/V)
+	      // --------- DHT22 every 2 sec ---------
+	      if (HAL_GetTick() - dht_last_ms >= 2100)
+	      {
+	          DHT22_Read(&dht);
+	          dht_last_ms = HAL_GetTick();
+	      }
 
-    // Ratio Rs/Ro
-    ratio = Rs / Ro;
+	      // --------- ALARM CHECK ---------
+	      int alarm = 0;
 
-    // ======= MQ-2 PPM (rough estimates) =======
-    float ppm_lpg   = powf(10.0f, ((log10f(ratio) - (-0.47f)) / (-0.36f)));
-    float ppm_smoke = powf(10.0f, ((log10f(ratio) - (-0.42f)) / (-0.48f)));
-    float ppm_co    = powf(10.0f, ((log10f(ratio) - (-0.37f)) / (-0.33f)));
+	      if (dht.Temperature > 35.0) alarm = 1;
+	      if (dht.Humidity > 70.0) alarm = 1;
+	      if (ppm_lpg   > 200.0)     alarm = 1;
+	      if (ppm_smoke > 300.0)     alarm = 1;
+	      if (ppm_co    > 50.0)      alarm = 1;
 
-    // ===== Update LCD (two quick pages: T/H then GAS/LDR) =====
-    char line[32];
+	      if (alarm)
+	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);     // ON
+	      else
+	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);   // OFF
 
-    // Page 1: Temperature & Humidity
-    LCD_SendCommand(0x01); // clear
-    snprintf(line, sizeof(line), "T:%.1fC  H:%.1f%%", dht.Temperature, dht.Humidity);
-    LCD_SendString(line);
-    HAL_Delay(800);
+	      // --------- LCD PAGE 1: Temp & Humidity ---------
+	      LCD_SendCommand(0x01);
+	      char line[32];
+	      snprintf(line, sizeof(line), "T:%.1fC H:%.1f%%", dht.Temperature, dht.Humidity);
+	      LCD_SendString(line);
+	      HAL_Delay(1000);
 
-    // Page 2: Gas + Light
-    LCD_SendCommand(0x01); // clear
-    snprintf(line, sizeof(line), "LPG:%0.0f CO:%0.0f", ppm_lpg, ppm_co);
-    LCD_SendString(line);
-    // if your lcd lib has SetCursor(row,col), you can add the LDR on 2nd line.
-    // else keep it simple on one line to avoid API mismatch.
-    HAL_Delay(800);
+	      // --------- LCD PAGE 2: Gas & LDR ---------
+	      LCD_SendCommand(0x01);
+	      snprintf(line, sizeof(line), "LPG:%0.0f CO:%0.0f", ppm_lpg, ppm_co);
+	      LCD_SendString(line);
+	      HAL_Delay(1000);
 
-    // ===== Send data via Bluetooth (USART3) =====
-    char bt_msg[220];
-    snprintf(bt_msg, sizeof(bt_msg),
-             "TEMP=%.1fC,HUM=%.1f%%,LDR=%s,LPG=%.0fppm,SMOKE=%.0fppm,CO=%.0fppm\r\n",
-             dht.Temperature, dht.Humidity, ldr_text, ppm_lpg, ppm_smoke, ppm_co);
-    HAL_UART_Transmit(&huart3, (uint8_t*)bt_msg, strlen(bt_msg), 200);
+	      // --------- BLUETOOTH MESSAGE ---------
+	      char bt_msg[200];
+	      snprintf(bt_msg, sizeof(bt_msg),
+	               "TEMP=%.1fC,HUM=%.1f%%,LDR=%s,LPG=%.0fppm,SMOKE=%.0fppm,CO=%.0fppm,ALARM=%d\r\n",
+	               dht.Temperature, dht.Humidity, ldr_text, ppm_lpg, ppm_smoke, ppm_co, alarm);
 
-    // keep your existing final delay if you want a slower overall loop
-    HAL_Delay(400);
+	      HAL_UART_Transmit(&huart3, (uint8_t*)bt_msg, strlen(bt_msg), 100);
   }
   /* USER CODE END 3 */
 }
@@ -457,6 +462,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_10
                           |GPIO_PIN_12|GPIO_PIN_14|GPIO_PIN_5, GPIO_PIN_RESET);
 
@@ -471,12 +479,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(CS_I2C_SPI_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : OTG_FS_PowerSwitchOn_Pin */
-  GPIO_InitStruct.Pin = OTG_FS_PowerSwitchOn_Pin;
+  /*Configure GPIO pins : OTG_FS_PowerSwitchOn_Pin PC5 */
+  GPIO_InitStruct.Pin = OTG_FS_PowerSwitchOn_Pin|GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(OTG_FS_PowerSwitchOn_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PDM_OUT_Pin */
   GPIO_InitStruct.Pin = PDM_OUT_Pin;
