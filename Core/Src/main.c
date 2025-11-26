@@ -159,12 +159,12 @@ int main(void)
     /* USER CODE END WHILE */
 	  MX_USB_HOST_Process();
 
-	      // --------- LDR Read ---------
+	      // --------- LDR ---------
 	      ldr_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
 	      int L = (ldr_state == GPIO_PIN_RESET) ? 1 : 0;
 	      char *ldr_text = (L == 1) ? "BRIGHT" : "DARK";
 
-	      // --------- MQ-2 ADC Read ---------
+	      // --------- MQ-2 ADC ---------
 	      HAL_ADC_Start(&hadc1);
 	      HAL_ADC_PollForConversion(&hadc1, 100);
 	      mq_raw = HAL_ADC_GetValue(&hadc1);
@@ -184,40 +184,45 @@ int main(void)
 	          dht_last_ms = HAL_GetTick();
 	      }
 
-	      // --------- ALARM CHECK ---------
+	      // --------- BUZZER THRESHOLDS ---------
 	      int alarm = 0;
 
 	      if (dht.Temperature > 35.0) alarm = 1;
-	      if (dht.Humidity > 70.0) alarm = 1;
+	      if (dht.Humidity > 70.) alarm = 1;
 	      if (ppm_lpg   > 200.0)     alarm = 1;
 	      if (ppm_smoke > 300.0)     alarm = 1;
 	      if (ppm_co    > 50.0)      alarm = 1;
 
 	      if (alarm)
-	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);     // ON
+	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);
 	      else
-	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);   // OFF
+	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
 
-	      // --------- LCD PAGE 1: Temp & Humidity ---------
+	      // --------- LCD: ALL VALUES ON ONE SCREEN ---------
 	      LCD_SendCommand(0x01);
-	      char line[32];
-	      snprintf(line, sizeof(line), "T:%.1fC H:%.1f%%", dht.Temperature, dht.Humidity);
-	      LCD_SendString(line);
-	      HAL_Delay(1000);
+	      HAL_Delay(5);
 
-	      // --------- LCD PAGE 2: Gas & LDR ---------
-	      LCD_SendCommand(0x01);
-	      snprintf(line, sizeof(line), "LPG:%0.0f CO:%0.0f", ppm_lpg, ppm_co);
-	      LCD_SendString(line);
-	      HAL_Delay(1000);
+	      char line1[17];
+	      snprintf(line1, sizeof(line1), "T:%2.0f H:%2.0f L:%c",
+	               dht.Temperature, dht.Humidity, (L ? 'B' : 'D'));
+	      LCD_SetCursor(0,0);
+	      LCD_SendString(line1);
 
-	      // --------- BLUETOOTH MESSAGE ---------
+	      char line2[17];
+	      snprintf(line2, sizeof(line2), "LPG:%3.0f CO:%3.0f", ppm_lpg, ppm_co);
+	      LCD_SetCursor(1,0);
+	      LCD_SendString(line2);
+
+	      // --------- Bluetooth ---------
 	      char bt_msg[200];
 	      snprintf(bt_msg, sizeof(bt_msg),
-	               "TEMP=%.1fC,HUM=%.1f%%,LDR=%s,LPG=%.0fppm,SMOKE=%.0fppm,CO=%.0fppm,ALARM=%d\r\n",
-	               dht.Temperature, dht.Humidity, ldr_text, ppm_lpg, ppm_smoke, ppm_co, alarm);
+	               "TEMP=%.1f,HUM=%.1f,LDR=%s,LPG=%.0f,SMOKE=%.0f,CO=%.0f,ALARM=%d\r\n",
+	               dht.Temperature, dht.Humidity, ldr_text,
+	               ppm_lpg, ppm_smoke, ppm_co, alarm);
 
 	      HAL_UART_Transmit(&huart3, (uint8_t*)bt_msg, strlen(bt_msg), 100);
+
+	      HAL_Delay(500);
   }
   /* USER CODE END 3 */
 }
