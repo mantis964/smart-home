@@ -1,0 +1,2 @@
+../Core/Src/dht22.c:16:6:delay_us	2
+../Core/Src/dht22.c:22:9:DHT22_Read	8
