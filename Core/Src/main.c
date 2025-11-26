@@ -24,6 +24,8 @@
 /* USER CODE BEGIN Includes */
 #include "lcd.h"
 #include <math.h>
+#include <string.h>
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,9 +46,9 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
-I2S_HandleTypeDef hi2s3;
-
 SPI_HandleTypeDef hspi1;
+
+UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 
@@ -55,9 +57,9 @@ SPI_HandleTypeDef hspi1;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_USART3_UART_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
@@ -105,10 +107,10 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_I2S3_Init();
   MX_SPI1_Init();
   MX_USB_HOST_Init();
   MX_ADC1_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
   LCD_Init();
@@ -143,63 +145,44 @@ int main(void)
     /* USER CODE END WHILE */
     MX_USB_HOST_Process();
 
+    /* USER CODE BEGIN 3 */
+    // ===== LDR Read (Digital) =====
+    ldr_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+    int L = (ldr_state == GPIO_PIN_RESET) ? 1 : 0;  // 1 = Bright
+    char *ldr_text = (L == 1) ? "BRIGHT" : "DARK";
+
+    // ===== MQ-2 ADC Read =====
     HAL_ADC_Start(&hadc1);
-        HAL_ADC_PollForConversion(&hadc1, 100);
+    HAL_ADC_PollForConversion(&hadc1, 100);
+    mq_raw = HAL_ADC_GetValue(&hadc1);
 
-        mq_raw = HAL_ADC_GetValue(&hadc1);
-        mq_voltage = (mq_raw * 3.3f) / 4095.0f;
+    // ADC → Voltage
+    mq_voltage = (mq_raw * 3.3f) / 4095.0f;
 
-        Rs = (3.3f - mq_voltage) / mq_voltage;
-        ratio = Rs / Ro;
+    // Sensor Resistance
+    Rs = (3.3f - mq_voltage) / mq_voltage;
 
-        // ===== PPM Calculations =====
-        float ppm_lpg = pow(10, ((log10(ratio) - (-0.47)) / (-0.36)));
-        float ppm_smoke = pow(10, ((log10(ratio) - (-0.42)) / (-0.48)));
-        float ppm_co = pow(10, ((log10(ratio) - (-0.37)) / (-0.33)));
+    // Ratio Rs/Ro (Ro = clean air calibration constant)
+    ratio = Rs / Ro;
 
-        // ===== LDR digital input (PA0) =====
-        uint8_t ldr_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+    // ======= MQ-2 PPM CALCULATIONS =======
+    // From datasheet log-log curves
 
-        // ===== LCD DISPLAY (ALL ON ONE SCREEN) =====
-        LCD_SendCommand(0x01);
+    float ppm_lpg   = pow(10, ((log10(ratio) - (-0.47)) / (-0.36)));
+    float ppm_smoke = pow(10, ((log10(ratio) - (-0.42)) / (-0.48)));
+    float ppm_co    = pow(10, ((log10(ratio) - (-0.37)) / (-0.33)));
 
-        // Line 1: R, V, LDR
-        LCD_SetCursor(0,0);
-        LCD_SendString("R:");
-        LCD_SendInt(mq_raw);
+    // ===== Send data via Bluetooth =====
+    char bt_msg[200];
+    snprintf(bt_msg, sizeof(bt_msg),
+             "LDR=%s | LPG=%.0f ppm | SMOKE=%.0f ppm | CO=%.0f ppm\r\n",
+             ldr_text, ppm_lpg, ppm_smoke, ppm_co);
 
-        LCD_SetCursor(0,8);
-        LCD_SendString("V:");
-        LCD_SendFloat(mq_voltage);
+    HAL_UART_Transmit(&huart3, (uint8_t*)bt_msg, strlen(bt_msg), 100);
 
-        LCD_SetCursor(0,15);
-        LCD_SendString("L:");
-        if (ldr_state == GPIO_PIN_SET)
-            LCD_SendString("DARK");   // bright
-        else
-            LCD_SendString("BRGT");   // dark
+    HAL_Delay(1000);
 
-        // Line 2: LPG
-        LCD_SetCursor(1,0);
-        LCD_SendString("LPG:");
-        LCD_SendInt((int)ppm_lpg);
-        LCD_SendString(" ppm");
-
-        // Line 3: CO
-        LCD_SetCursor(2,0);
-        LCD_SendString("CO :");
-        LCD_SendInt((int)ppm_co);
-        LCD_SendString(" ppm");
-
-        // Line 4: Smoke
-        LCD_SetCursor(3,0);
-        LCD_SendString("SMK:");
-        LCD_SendInt((int)ppm_smoke);
-        LCD_SendString(" ppm");
-
-        HAL_Delay(300);
-
-  }// read every 2 seconds
+  }
   /* USER CODE END 3 */
 }
 
@@ -301,40 +284,6 @@ static void MX_ADC1_Init(void)
 }
 
 /**
-  * @brief I2S3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2S3_Init(void)
-{
-
-  /* USER CODE BEGIN I2S3_Init 0 */
-
-  /* USER CODE END I2S3_Init 0 */
-
-  /* USER CODE BEGIN I2S3_Init 1 */
-
-  /* USER CODE END I2S3_Init 1 */
-  hi2s3.Instance = SPI3;
-  hi2s3.Init.Mode = I2S_MODE_MASTER_TX;
-  hi2s3.Init.Standard = I2S_STANDARD_PHILIPS;
-  hi2s3.Init.DataFormat = I2S_DATAFORMAT_16B;
-  hi2s3.Init.MCLKOutput = I2S_MCLKOUTPUT_ENABLE;
-  hi2s3.Init.AudioFreq = I2S_AUDIOFREQ_96K;
-  hi2s3.Init.CPOL = I2S_CPOL_LOW;
-  hi2s3.Init.ClockSource = I2S_CLOCK_PLL;
-  hi2s3.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
-  if (HAL_I2S_Init(&hi2s3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2S3_Init 2 */
-
-  /* USER CODE END I2S3_Init 2 */
-
-}
-
-/**
   * @brief SPI1 Initialization Function
   * @param None
   * @retval None
@@ -369,6 +318,39 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief USART3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART3_Init 0 */
+
+  /* USER CODE END USART3_Init 0 */
+
+  /* USER CODE BEGIN USART3_Init 1 */
+
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 9600;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
+
+  /* USER CODE END USART3_Init 2 */
 
 }
 
@@ -434,6 +416,14 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : I2S3_WS_Pin */
+  GPIO_InitStruct.Pin = I2S3_WS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
+  HAL_GPIO_Init(I2S3_WS_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pins : PB0 PB1 PB2 PB10
                            PB12 PB14 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_10
@@ -451,6 +441,14 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : I2S3_MCK_Pin I2S3_SD_Pin */
+  GPIO_InitStruct.Pin = I2S3_MCK_Pin|I2S3_SD_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : OTG_FS_OverCurrent_Pin */
   GPIO_InitStruct.Pin = OTG_FS_OverCurrent_Pin;
