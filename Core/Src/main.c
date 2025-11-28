@@ -81,6 +81,9 @@ uint32_t mq_raw = 0;
 float mq_voltage = 0;
 float Rs = 0, ratio = 0;
 uint8_t ldr_state = 0;
+int alarm = 0;          // GLOBAL alarm flag
+int alarm_latched = 0;  // stays ON until reset button pressed
+
 
 // Calibration constant (You can calibrate later)
 float Ro = 10.0;  // Assume clean-air baseline
@@ -124,8 +127,20 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
 
+  // ---- LCD POWER-UP FIX (prevents garbage on first boot) ----
+  HAL_Delay(50);
+  LCD_SendCommand(0x30);
+  HAL_Delay(5);
+  LCD_SendCommand(0x30);
+  HAL_Delay(1);
+  LCD_SendCommand(0x30);
+  HAL_Delay(1);
+
+
+
   LCD_Init();
-  HAL_Delay(500);
+  LCD_SendCommand(0x01);
+  HAL_Delay(3000);
   LCD_SendCommand(0x01);
   LCD_SendString("MQ2 Initializing");
   HAL_Delay(2000);
@@ -138,7 +153,7 @@ int main(void)
   HAL_Delay(1000);
 
   // ---- Initialize LCD ----
-  LCD_Init();
+//  LCD_Init();
   HAL_Delay(500);
 
 
@@ -193,10 +208,33 @@ int main(void)
 	      if (ppm_smoke > 300.0)     alarm = 1;
 	      if (ppm_co    > 50.0)      alarm = 1;
 
-	      if (alarm)
+	      // --------- LATCH ALARM UNTIL RESET BUTTON PRESSED ---------
+	      if (alarm) {
+	          alarm_latched = 1;   // once alarm goes ON, it stays ON
+	      }
+
+	      // --------- RESET BUTTON (PA2, PULL-DOWN) ---------
+	      if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET)   // button pressed
+	      {
+	          HAL_Delay(50); // debounce
+	          if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET)
+	          {
+	              alarm_latched = 0;
+	              HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+
+	              // LCD feedback
+	              LCD_SendCommand(0x01);
+	              LCD_SendString(" Alarm Reset ");
+	              HAL_Delay(500);
+	          }
+	      }
+
+
+	      if (alarm_latched)
 	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);
 	      else
 	          HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+
 
 	      // --------- LCD: ALL VALUES ON ONE SCREEN ---------
 	      LCD_SendCommand(0x01);
@@ -218,7 +256,7 @@ int main(void)
 	      snprintf(bt_msg, sizeof(bt_msg),
 	               "TEMP=%.1f,HUM=%.1f,LDR=%s,LPG=%.0f,SMOKE=%.0f,CO=%.0f,ALARM=%d\r\n",
 	               dht.Temperature, dht.Humidity, ldr_text,
-	               ppm_lpg, ppm_smoke, ppm_co, alarm);
+	               ppm_lpg, ppm_smoke, ppm_co, alarm_latched);
 
 	      HAL_UART_Transmit(&huart3, (uint8_t*)bt_msg, strlen(bt_msg), 100);
 
