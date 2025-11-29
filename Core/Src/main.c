@@ -104,7 +104,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+																																																																																																																																																																																																																																																																																																																																																																													HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -202,8 +202,8 @@ int main(void)
 	      // --------- BUZZER THRESHOLDS ---------
 	      int alarm = 0;
 
-	      if (dht.Temperature > 35.0) alarm = 1;
-	      if (dht.Humidity > 70.) alarm = 1;
+	      if (dht.Temperature > 30.0) alarm = 1;
+//	      if (dht.Humidity > 70.) alarm = 1;
 	      if (ppm_lpg   > 200.0)     alarm = 1;
 	      if (ppm_smoke > 300.0)     alarm = 1;
 	      if (ppm_co    > 50.0)      alarm = 1;
